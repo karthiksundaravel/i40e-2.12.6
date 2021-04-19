@@ -4655,7 +4655,8 @@ static bool i40e_clean_fdir_tx_irq(struct i40e_ring *tx_ring, int budget)
 			break;
 
 		/* prevent any other reads prior to eop_desc */
-		read_barrier_depends();
+		smp_rmb();
+		// read_barrier_depends(); Compilation issue
 
 		/* if the descriptor isn't done, no work yet to do */
 		if (!(eop_desc->cmd_type_offset_bsz &
@@ -13204,12 +13205,14 @@ static int i40e_xdp(struct net_device *dev,
 	switch (xdp->command) {
 	case XDP_SETUP_PROG:
 		return i40e_xdp_setup(vsi, xdp->prog);
+#ifdef NO_TAAS  /* Compilation issue */
 	case XDP_QUERY_PROG:
 #ifndef NO_NETDEV_BPF_PROG_ATTACHED
 		xdp->prog_attached = i40e_enabled_xdp_vsi(vsi);
 #endif /* !NO_NETDEV_BPF_PROG_ATTACHED */
 		xdp->prog_id = vsi->xdp_prog ? vsi->xdp_prog->aux->id : 0;
 		return 0;
+#endif /* NO_TAAS */
 	default:
 		return -EINVAL;
 	}
@@ -13556,6 +13559,8 @@ static const struct net_device_ops_ext i40e_netdev_ops_ext = {
 #ifdef HAVE_NDO_SET_VF_LINK_STATE
 	.ndo_set_vf_link_state	= i40e_ndo_set_vf_link_state,
 #endif
+	.ndo_set_vf_mirror = i40e_ndo_set_vf_mirror,
+	.ndo_get_vf_mirror = i40e_ndo_get_vf_mirror,
 };
 #else /* HAVE_NET_DEVICE_OPS */
 /**
@@ -16391,7 +16396,7 @@ debug_mode_clear:
  * remediation.
  **/
 static pci_ers_result_t i40e_pci_error_detected(struct pci_dev *pdev,
-						enum pci_channel_state error)
+						pci_channel_state_t error) /* Compilation issue */
 {
 	struct i40e_pf *pf = pci_get_drvdata(pdev);
 

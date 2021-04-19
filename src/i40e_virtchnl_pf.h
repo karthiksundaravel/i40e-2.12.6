@@ -122,6 +122,7 @@ struct i40e_vf {
 	int ingress_vlan;
 	u16 egress_rule_id;
 	int egress_vlan;
+	bool data_changed;
 	DECLARE_BITMAP(trunk_vlans, VLAN_N_VID);
 	bool trunk_set_by_pf;
 	bool allow_untagged;
@@ -192,6 +193,9 @@ void i40e_restore_all_vfs_msi_state(struct pci_dev *pdev);
 int i40e_get_vf_stats(struct net_device *netdev, int vf_id,
 		      struct ifla_vf_stats *vf_stats);
 #endif
+
+int i40e_ndo_set_vf_mirror(struct net_device *netdev, struct nlattr *vf_mirror);
+int i40e_ndo_get_vf_mirror(struct net_device *netdev, struct ifla_vf_mirror_info *vf_mirror);
 extern const struct vfd_ops i40e_vfd_ops;
 
 #endif /* _I40E_VIRTCHNL_PF_H_ */

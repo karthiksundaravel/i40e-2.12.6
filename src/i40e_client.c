@@ -800,4 +800,146 @@ static void i40e_client_device_unregister(struct i40e_info *ldev)
 	pf->cinst->client = NULL;
 	clear_bit(__I40E_SERVICE_SCHED, pf->state);
 }
+/**
+ * i40e_client_release - release client specific resources
+ * @client: pointer to the registered client
+ *
+ **/
+static void i40e_client_release(struct i40e_client *client)
+{
+        struct i40e_client_instance *cdev;
+        struct i40e_device *ldev;
+        struct i40e_pf *pf;
+
+        mutex_lock(&i40e_device_mutex);
+        list_for_each_entry(ldev, &i40e_devices, list) {
+                pf = ldev->pf;
+                cdev = pf->cinst;
+                if (!cdev)
+                        continue;
+
+                while (test_and_set_bit(__I40E_SERVICE_SCHED,
+                                        pf->state))
+                        usleep_range(500, 1000);
+
+                if (test_bit(__I40E_CLIENT_INSTANCE_OPENED, &cdev->state)) {
+                        if (client->ops && client->ops->close)
+                                client->ops->close(&cdev->lan_info, client,
+                                                   false);
+                        i40e_client_release_qvlist(&cdev->lan_info);
+                        clear_bit(__I40E_CLIENT_INSTANCE_OPENED, &cdev->state);
+
+                        dev_warn(&pf->pdev->dev,
+                                 "Client %s instance for PF id %d closed\n",
+                                 client->name, pf->hw.pf_id);
+                }
+                /* delete the client instance */
+                i40e_client_del_instance(pf);
+                dev_info(&pf->pdev->dev, "Deleted client instance of Client %s\n",
+                         client->name);
+                clear_bit(__I40E_SERVICE_SCHED, pf->state);
+        }
+        mutex_unlock(&i40e_device_mutex);
+}
+
+/**
+ * i40e_client_prepare - prepare client specific resources
+ * @client: pointer to the registered client
+ *
+ **/
+static void i40e_client_prepare(struct i40e_client *client)
+{
+        struct i40e_device *ldev;
+        struct i40e_pf *pf;
+
+        mutex_lock(&i40e_device_mutex);
+        list_for_each_entry(ldev, &i40e_devices, list) {
+                pf = ldev->pf;
+                i40e_client_add_instance(pf);
+                /* Start the client subtask */
+                set_bit(__I40E_CLIENT_SERVICE_REQUESTED, pf->state);
+                i40e_service_event_schedule(pf);
+        }
+        mutex_unlock(&i40e_device_mutex);
+}
+
+/**
+ * i40e_register_client - Register a i40e client driver with the L2 driver
+ * @client: pointer to the i40e_client struct
+ *
+ * Returns 0 on success or non-0 on error
+ **/
+int i40e_register_client(struct i40e_client *client)
+{
+        int ret = 0;
+
+        if (!client) {
+                ret = -EIO;
+                goto out;
+        }
+
+        if (strlen(client->name) == 0) {
+                pr_info("i40e: Failed to register client with no name\n");
+                ret = -EIO;
+                goto out;
+        }
+
+        if (registered_client) {
+                pr_info("i40e: Client %s has already been registered!\n",
+                        client->name);
+                ret = -EEXIST;
+                goto out;
+        }
+
+        if ((client->version.major != I40E_CLIENT_VERSION_MAJOR) ||
+            (client->version.minor != I40E_CLIENT_VERSION_MINOR)) {
+                pr_info("i40e: Failed to register client %s due to mismatched client interface version\n",
+                        client->name);
+                pr_info("Client is using version: %02d.%02d.%02d while LAN driver supports %s\n",
+                        client->version.major, client->version.minor,
+                        client->version.build,
+                        i40e_client_interface_version_str);
+                ret = -EIO;
+                goto out;
+        }
+
+        registered_client = client;
+
+        i40e_client_prepare(client);
+
+        pr_info("i40e: Registered client %s\n", client->name);
+out:
+        return ret;
+}
+EXPORT_SYMBOL(i40e_register_client);
+
+
+/**
+ * i40e_unregister_client - Unregister a i40e client driver with the L2 driver
+ * @client: pointer to the i40e_client struct
+ *
+ * Returns 0 on success or non-0 on error
+ **/
+int i40e_unregister_client(struct i40e_client *client)
+{
+        int ret = 0;
+
+        if (registered_client != client) {
+                pr_info("i40e: Client %s has not been registered\n",
+                        client->name);
+                ret = -ENODEV;
+                goto out;
+        }
+        registered_client = NULL;
+        /* When a unregister request comes through we would have to send
+         * a close for each of the client instances that were opened.
+         * client_release function is called to handle this.
+         */
+        i40e_client_release(client);
+
+        pr_info("i40e: Unregistered client %s\n", client->name);
+out:
+        return ret;
+}
+EXPORT_SYMBOL(i40e_unregister_client);
 
