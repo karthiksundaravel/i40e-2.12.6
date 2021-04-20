@@ -12416,6 +12416,7 @@ static int i40e_sw_init(struct i40e_pf *pf)
 	pf->egress_vlan = I40E_NO_VF_MIRROR;
 
 	mutex_init(&pf->switch_mutex);
+	mutex_init(&pf->vf_mirror_mutex);
 
 sw_init_done:
 	return err;

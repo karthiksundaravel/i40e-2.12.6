@@ -6295,26 +6295,29 @@ int i40e_ndo_set_vf_mirror(struct net_device *netdev,  struct nlattr *vf_mirror)
 	unsigned long *vlan_bits = NULL;
 	unsigned long *vf_ingress = NULL;
 	unsigned long *vf_egress = NULL;
+	struct i40e_netdev_priv *np = netdev_priv(netdev);
+	struct i40e_vsi *vsi = np->vsi;
+	struct i40e_pf *pf = vsi->back;
 	ret = -ENOMEM;
 	vlan_bits = kcalloc(BITS_TO_LONGS(VLAN_N_VID), sizeof(unsigned long),
 			    GFP_KERNEL);
 	if (!vlan_bits)
-		goto exit;
+		goto free_mem;
 
 	vf_ingress = kcalloc(BITS_TO_LONGS(I40E_MAX_VF_COUNT), sizeof(unsigned long),
 			     GFP_KERNEL);
 	if (!vf_ingress)
-		goto exit;
+		goto free_mem;
 	vf_egress = kcalloc(BITS_TO_LONGS(I40E_MAX_VF_COUNT), sizeof(unsigned long),
 			   GFP_KERNEL);
 	if (!vf_egress)
-		goto exit;
+		goto free_mem;
 
 	nla_for_each_nested(attr, vf_mirror, rem) {
 		if (curr_type != -1 && curr_type != nla_type(attr))
 		{
 			ret = -EINVAL;
-			goto exit;
+			goto free_mem;
 		}
 		else
 			curr_type = nla_type(attr);
@@ -6323,7 +6326,7 @@ int i40e_ndo_set_vf_mirror(struct net_device *netdev,  struct nlattr *vf_mirror)
 			ivmv= (struct ifla_vf_mirror_vf *) nla_data(attr);
 			if(curr_dst_vf != -1 && curr_dst_vf != ivmv->dst_vf) {
 				ret = -EINVAL;
-				goto exit;
+				goto free_mem;
 			}
 			else
 				curr_dst_vf = ivmv->dst_vf;
@@ -6337,21 +6340,12 @@ int i40e_ndo_set_vf_mirror(struct net_device *netdev,  struct nlattr *vf_mirror)
 		}
 		else if (nla_type(attr) == IFLA_VF_MIRROR_PF){
 			ivmp= (struct ifla_vf_mirror_pf *) nla_data(attr);
-
-			ret= i40e_set_pf_ingress_mirror_netdev(netdev,ivmp->dst_vf,
-						(ivmp->dir_mask & PORT_MIRRORING_INGRESS)?true :false);
-			if (ret)
-				goto exit;
-			ret= i40e_set_pf_egress_mirror_netdev(netdev,ivmp->dst_vf,
-				       (ivmp->dir_mask & PORT_MIRRORING_EGRESS)? true :false);
-			if (ret)
-				goto exit;
 		}
 		else if (nla_type(attr) == IFLA_VF_MIRROR_VLAN){
 			ivml= (struct ifla_vf_mirror_vlan *) nla_data(attr);
 			if(curr_dst_vf != -1 && curr_dst_vf != ivml->dst_vf) {
 				ret = -EINVAL;
-				goto exit;
+				goto free_mem;
 			}
 			else
 				curr_dst_vf = ivml->dst_vf;
@@ -6360,17 +6354,15 @@ int i40e_ndo_set_vf_mirror(struct net_device *netdev,  struct nlattr *vf_mirror)
 			else
 			{
 				ret = -EINVAL;
-				goto exit;
+				goto free_mem;
 			}
 		}
 		else if (nla_type(attr) == IFLA_VF_MIRROR_CLEAR){
 			ivmc = (struct ifla_vf_mirror_clear *) nla_data(attr);
-			ret = i40e_vf_clear_mirror(netdev, ivmc->dst_vf);
-			if (ret)
-				goto exit;
 		}
 
 	}
+	mutex_lock(&pf->vf_mirror_mutex);
 	if (curr_type == IFLA_VF_MIRROR_VF){
 		ret = i40e_set_ingress_mirror_netdev(netdev, curr_dst_vf, vf_ingress) ;
 		if (ret)
@@ -6384,8 +6376,25 @@ int i40e_ndo_set_vf_mirror(struct net_device *netdev,  struct nlattr *vf_mirror)
 		if (ret)
 			goto exit;
 	}
+	else if (curr_type == IFLA_VF_MIRROR_PF) {
+		ret= i40e_set_pf_ingress_mirror_netdev(netdev,ivmp->dst_vf,
+						(ivmp->dir_mask & PORT_MIRRORING_INGRESS)?true :false);
+		if (ret)
+			goto exit;
+		ret= i40e_set_pf_egress_mirror_netdev(netdev,ivmp->dst_vf,
+			       (ivmp->dir_mask & PORT_MIRRORING_EGRESS)? true :false);
+		if (ret)
+			goto exit;
+	}
+	else if (curr_type == IFLA_VF_MIRROR_CLEAR) {
+		ret = i40e_vf_clear_mirror(netdev, ivmc->dst_vf);
+		if (ret)
+			goto exit;
+	}
 
 exit:
+	mutex_unlock(&pf->vf_mirror_mutex);
+free_mem:
 	if(vlan_bits)
 		kfree(vlan_bits);
 	if(vf_ingress)
@@ -6438,29 +6447,31 @@ int i40e_ndo_get_vf_mirror(struct net_device *netdev, struct ifla_vf_mirror_info
 	if (ret)
 		return ret;
 	vf = &pf->vf[req_vf];
-	if (vf->data_changed && req_pos != 1) {
-		return -EAGAIN;
-	}
 
 	ret = -ENOMEM;
 	vlan_bits = kcalloc(BITS_TO_LONGS(VLAN_N_VID), sizeof(unsigned long),
 			   GFP_KERNEL);
 	if (!vlan_bits)
-		goto exit;
+		goto free_mem;
 
 	vf_ingress = kcalloc(BITS_TO_LONGS(I40E_MAX_VF_COUNT), sizeof(unsigned long),
 			   GFP_KERNEL);
 	if (!vf_ingress)
-		goto exit;
+		goto free_mem;
 	vf_egress = kcalloc(BITS_TO_LONGS(I40E_MAX_VF_COUNT), sizeof(unsigned long),
 			   GFP_KERNEL);
 	if (!vf_egress)
-		goto exit;
+		goto free_mem;
 	vf_bidir = kcalloc(BITS_TO_LONGS(I40E_MAX_VF_COUNT), sizeof(unsigned long),
 			   GFP_KERNEL);
 	if (!vf_bidir)
-		goto exit;
+		goto free_mem;
 
+	mutex_lock(&pf->vf_mirror_mutex);
+	if (vf->data_changed && req_pos != 1) {
+		ret = -EAGAIN;
+		goto exit;
+	}
 	vf->data_changed = 0;
 
 	ret = i40e_get_ingress_mirror_netdev(netdev, req_vf, vf_ingress);
@@ -6554,6 +6565,8 @@ int i40e_ndo_get_vf_mirror(struct net_device *netdev, struct ifla_vf_mirror_info
 
 	ret = -ENODATA;
 exit:
+	mutex_unlock(&pf->vf_mirror_mutex);
+free_mem:
 	if(vlan_bits)
 		kfree(vlan_bits);
 	if(vf_ingress)

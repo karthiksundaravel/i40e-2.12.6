@@ -677,7 +677,7 @@ struct i40e_pf {
 	bool cur_promisc;
 
 	u16 instance; /* A unique number per i40e_pf instance in the system */
-
+	struct mutex vf_mirror_mutex;
 	/* sr-iov config info */
 	struct i40e_vf *vf;
 	int num_alloc_vfs;	/* actual number of VFs allocated */
